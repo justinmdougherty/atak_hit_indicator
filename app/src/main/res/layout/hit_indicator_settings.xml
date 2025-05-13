@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <!-- Bluetooth Connection Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Bluetooth Connection"
+        android:textStyle="bold"
+        android:textSize="18sp"
+        android:layout_marginBottom="8dp"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:id="@+id/connectionStatusText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Not connected"
+            android:textColor="#FF0000"/>
+
+        <Button
+            android:id="@+id/scanDevicesButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Scan"/>
+    </LinearLayout>
+
+    <!-- Device List expands to fill available space -->
+    <ListView
+        android:id="@+id/deviceListView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#F5F5F5"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Everything below stays at the bottom -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Target Configuration Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Target Configuration"
+            android:textStyle="bold"
+            android:textSize="18sp"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/scanTargetsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Scan for Targets"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/resetAllTargetsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Reset All Target Counts"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/removeAllTargetsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Remove All Targets"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Calibration Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Time-to-Impact Calibration"
+            android:textStyle="bold"
+            android:textSize="18sp"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/calibrateAllButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Calibrate All Targets"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Back Button -->
+        <Button
+            android:id="@+id/backButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Back to Main Screen" />
+    </LinearLayout>
+</LinearLayout>

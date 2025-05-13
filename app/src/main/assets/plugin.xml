@@ -1,0 +1,11 @@
+<plugin>
+    <extension
+        type="transapps.maps.plugin.lifecycle.Lifecycle"
+        impl="com.atakmap.android.hitIndicator.plugin.HitIndicatorLifecycle"
+        singleton="true" />
+
+    <extension
+        type="transapps.maps.plugin.tool.ToolDescriptor"
+        impl="com.atakmap.android.hitIndicator.plugin.HitIndicatorTool"
+        singleton="true" />
+</plugin>

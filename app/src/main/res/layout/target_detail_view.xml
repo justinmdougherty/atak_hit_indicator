@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#222222"
+    android:padding="8dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/detailTargetIdText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="10dp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="14dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:paddingEnd="4dp"> <TextView
+                android:id="@+id/detailRangeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#CCCCCC"
+                android:text="Range:        —"
+                android:layout_marginBottom="4dp"/>
+
+                <TextView
+                    android:id="@+id/detailSelfElevationText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="Firing Ln Elev:   —"
+                    android:layout_marginBottom="4dp"/>
+
+                <TextView
+                    android:id="@+id/detailTargetElevationText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="Target Elev:      —"
+                    android:layout_marginBottom="4dp"/>
+
+                <TextView
+                    android:id="@+id/detailVerticalOffsetText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="Vertical Offset:  —"
+                    android:layout_marginBottom="4dp"/>
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:paddingStart="4dp"> <TextView
+                android:id="@+id/detailBearingText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#CCCCCC"
+                android:text="Bearing:      —"
+                android:layout_marginBottom="4dp"/>
+
+                <TextView
+                    android:id="@+id/detailTiltAngleText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="Tilt Angle:       —"
+                    android:layout_marginBottom="4dp"/>
+
+                <TextView
+                    android:id="@+id/detailVoltageText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="Voltage:         —"
+                    android:layout_marginBottom="4dp"/>
+
+            </LinearLayout>
+
+        </LinearLayout> <com.atakmap.android.hitIndicator.ElevationProfileView
+        android:id="@+id/elevationProfileView"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:background="#333333"
+        android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:id="@+id/elevProfileCaptionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:textSize="12sp"
+            android:textColor="#FFFFFF"
+            android:text="Climb +0.0 m over 0.0 m → Tilt 0.0°"
+            android:layout_marginBottom="4dp"/>
+
+        <Button
+            android:id="@+id/detailBackButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Back"
+            android:textColor="#FFFFFF"
+            android:background="#444444"/>
+    </LinearLayout>
+</ScrollView>
