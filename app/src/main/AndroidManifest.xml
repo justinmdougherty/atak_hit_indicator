@@ -20,14 +20,37 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
-    <application>
+    <application
+        android:label="@string/app_name"
+        android:icon="@drawable/ic_launcher" >
+
         <meta-data android:name="plugin-api" android:value="${atakApiVersion}" />
-        <meta-data
-            android:name="com.atakmap.android.map.plugin.component"
-            android:value="com.atakmap.android.hitIndicator.HitIndicatorMapComponent" />
-        <!-- Add the display name -->
-        <meta-data
-            android:name="plugin-name"
-            android:value="Hit Indicator" />
+        <meta-data android:name="plugin-class" android:value="com.atakmap.android.hitIndicator.HitIndicatorMapComponent" />
+        <meta-data android:name="plugin-name" android:value="Hit Indicator" />
+        <meta-data android:name="plugin-version" android:value="1.0.0" />
+
+        <activity android:name="com.atakmap.app.component"  tools:ignore="MissingClass">
+            <intent-filter android:label="@string/app_name">
+                <action android:name="com.atakmap.app.component" />
+            </intent-filter>
+        </activity>
+
+        <!-- Ensure NO OTHER activity in this manifest has an intent-filter with
+             <action android:name="android.intent.action.MAIN" /> and
+             <category android:name="android.intent.category.LAUNCHER" />
+             if you don't want a standalone app icon.
+        -->
+
     </application>
+
+<!--    <application>-->
+<!--        <meta-data android:name="plugin-api" android:value="${atakApiVersion}" />-->
+<!--        <meta-data-->
+<!--            android:name="com.atakmap.android.map.plugin.component"-->
+<!--            android:value="com.atakmap.android.hitIndicator.HitIndicatorMapComponent" />-->
+<!--        &lt;!&ndash; Add the display name &ndash;&gt;-->
+<!--        <meta-data-->
+<!--            android:name="plugin-name"-->
+<!--            android:value="Hit Indicator" />-->
+<!--    </application>-->
 </manifest>

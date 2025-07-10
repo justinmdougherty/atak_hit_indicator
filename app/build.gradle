@@ -6,6 +6,13 @@
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+def keystorePropertiesFile = project.file("keystore.properties")
+//def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 buildscript {
 
     ext.PLUGIN_VERSION = "1.0"
@@ -100,48 +107,72 @@ android {
 
     signingConfigs {
         debug {
-            def kf = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyFile')
-            def kfp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyFilePassword')
-            def ka = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyAlias')
-            def kp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyPassword')
-
-            if (kf == null) {
-                 throw new GradleException("No signing key configured!")
-            }
- 
-            storeFile file(kf)
-            if (kfp != null) storePassword kfp
-            if (ka != null) keyAlias ka
-            if (kp != null) keyPassword kp
+//            def kf = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyFile')
+//            def kfp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyFilePassword')
+//            def ka = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyAlias')
+//            def kp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takDebugKeyPassword')
+//
+//            if (kf == null) {
+//                 throw new GradleException("No signing key configured!")
+//            }
+//
+//            storeFile file(kf)
+//            if (kfp != null) storePassword kfp
+//            if (ka != null) keyAlias ka
+//            if (kp != null) keyPassword kp
         }
-        release {
-            def kf = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyFile')
-            def kfp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyFilePassword')
-            def ka = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyAlias')
-            def kp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyPassword')
-
-            if (kf == null) {
-                 throw new GradleException("No signing key configured!")
-            }
-
-            storeFile file(kf)
-            if (kfp != null) storePassword kfp
-            if (ka != null) keyAlias ka
-            if (kp != null) keyPassword kp
+                release {
+           storeFile file("hit_keystore.jks") // Correct path to your keystore
+           storePassword "!!Jd001745!!"
+            keyAlias "hit_keystore_release"
+           keyPassword "!!Jd001745!!"
+//        release {
+//            if (keystorePropertiesFile.exists()) {
+//                storeFile file(keystoreProperties['storeFile'])
+//                storePassword keystoreProperties['storePassword']
+//                keyAlias keystoreProperties['keyAlias']
+//                keyPassword keystoreProperties['keyPassword']
+//            } else if (System.getenv("CI_KEYSTORE_FILE") != null) { // Optional: CI server support
+//                storeFile file(System.getenv("CI_KEYSTORE_FILE"))
+//                storePassword System.getenv("CI_STORE_PASSWORD")
+//                keyAlias System.getenv("CI_KEY_ALIAS")
+//                keyPassword System.getenv("CI_KEY_PASSWORD")
+//            }
         }
+//        release {
+//            def kf = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyFile')
+//            def kfp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyFilePassword')
+//            def ka = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyAlias')
+//            def kp = getValueFromPropertiesFile(project.rootProject.file('local.properties'), 'takReleaseKeyPassword')
+//
+//            if (kf == null) {
+//                 throw new GradleException("No signing key configured!")
+//            }
+//
+//            storeFile file(kf)
+//            if (kfp != null) storePassword kfp
+//            if (ka != null) keyAlias ka
+//            if (kp != null) keyPassword kp
+//        }
     }
 
     buildTypes {
         debug {
-            debuggable true
-            matchingFallbacks = ['sdk']
+//            debuggable true
+//            matchingFallbacks = ['sdk']
         }
-        release {
-            minifyEnabled true
-            proguardFile 'proguard-gradle.txt'
+         release {
             signingConfig signingConfigs.release
-            matchingFallbacks = ['odk']
+            minifyEnabled true // Recommended for release
+            shrinkResources true // Recommended for release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // You might have other release-specific settings here
         }
+//        release {
+//            minifyEnabled true
+//            proguardFile 'proguard-gradle.txt'
+//            signingConfig signingConfigs.release
+//            matchingFallbacks = ['odk']
     }
 
     flavorDimensions "application"

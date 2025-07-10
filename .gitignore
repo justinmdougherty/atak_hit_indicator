@@ -1,2 +1,5 @@
 /app/build/
 /app/src/gov/
+keystore.properties
+*.jks
+*.keystore
