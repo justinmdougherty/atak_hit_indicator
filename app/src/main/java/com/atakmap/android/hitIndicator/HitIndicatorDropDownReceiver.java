@@ -3,14 +3,19 @@ package com.atakmap.android.hitIndicator;
 import static com.atakmap.android.maps.MapView.getMapView;
 import static com.atakmap.coremap.maps.conversion.EGM96.*;
 
+import android.Manifest;
 import android.bluetooth.BluetoothDevice;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.location.Location;
+import android.os.Build;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
+
+import androidx.core.content.ContextCompat;
 
 import com.atakmap.android.maps.MapGroup;
 import com.atakmap.android.maps.PointMapItem;
@@ -35,16 +40,15 @@ import java.util.Map;
 import java.util.UUID;
 import com.atakmap.android.hitIndicator.ElevationProfileView;
 
-
 /**
  * Main UI controller for the Hit Indicator plugin.
  */
 public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         DropDown.OnStateListener,
-        BluetoothSerialManager.BluetoothSerialListener,
+        BLEManager.BLEListener,
         MessageParser.MessageListener,
         TargetListAdapter.TargetActionListener,
-        BluetoothDeviceAdapter.DeviceConnectListener {
+        BLEDeviceAdapter.DeviceConnectListener {
 
     private static final String TAG = "HitIndicatorDropDownReceiver";
     public static final String SHOW_PLUGIN = "com.atakmap.android.hitIndicator.SHOW_PLUGIN";
@@ -73,17 +77,18 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     private ImageButton refreshButton;
     private TargetListAdapter targetAdapter;
 
-
     // Settings UI components
     private TextView connectionStatusText;
     private Button scanDevicesButton;
+    private Button diagButton;
     private Button scanTargetsButton;
     private Button resetAllTargetsButton;
     private Button removeAllTargetsButton;
     private Button calibrateAllButton;
+    private Button generateTestTargetsButton;
     private Button backButtonSettings;
     private ListView deviceListView;
-    private BluetoothDeviceAdapter deviceAdapter;
+    private BLEDeviceAdapter deviceAdapter;
 
     // Detail View UI components
     private TextView detailTargetIdText;
@@ -97,11 +102,14 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     private TextView detailSelfElevationText;
 
     private TextView detailVoltageText;
+    private TextView detailGpsQualityText;
+    private TextView detailBallisticsText;
     private Button detailBackButton;
 
     // Communication components
-    private BluetoothSerialManager bluetoothManager;
+    private BLEManager bleManager;
     private MessageParser messageParser;
+    private ShotTracker shotTracker; // New shot tracking system
 
     // Calibration variables
     private String currentCalibrationTargetId;
@@ -126,16 +134,63 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         this.detailView = LayoutInflater.from(themed)
                 .inflate(R.layout.target_detail_view, null);
 
-        //this.detailView = View.inflate(context, R.layout.target_detail_view, null);
+        // this.detailView = View.inflate(context, R.layout.target_detail_view, null);
 
         // Initialize UI components
         initMainUI();
         initSettingsUI();
         initDetailUI();
 
-        // Initialize Bluetooth manager and message parser
-        bluetoothManager = new BluetoothSerialManager(mapView.getContext(), this);
+        // Initialize BLE manager and message parser
+        bleManager = new BLEManager(mapView.getContext(), this);
         messageParser = new MessageParser(this);
+
+        // Initialize shot tracker for ballistics calculations
+        shotTracker = new ShotTracker(new ShotTracker.ShotTrackerListener() {
+            @Override
+            public void onShotFired(String targetId, long shotTime) {
+                Log.d(TAG, "Shot fired at target: " + targetId);
+                updateStatus("Shot fired at " + targetId);
+
+                // Send "expect hit" message to target
+                if (bleManager != null && bleManager.hasConnectedDevices()) {
+                    bleManager.writeToAllDevices(MessageParser.createShotExpectedMessage(targetId, shotTime));
+                }
+            }
+
+            @Override
+            public void onHitCorrelated(String targetId, BallisticsCalculator.ShotData shotData) {
+                Log.d(TAG, "Hit correlated for target: " + targetId +
+                        ", ToF: " + shotData.timeOfFlight + "s");
+                updateStatus(String.format("Hit confirmed: %s (%.3fs)", targetId, shotData.timeOfFlight));
+
+                // Update target with ballistics data
+                Target target = targetManager.getTarget(targetId);
+                if (target != null && shotData.ballistics != null) {
+                    target.setBallisticsData(shotData.ballistics);
+                    target.setAverageTimeOfFlight(shotData.timeOfFlight);
+                    updateTargetAdapter();
+                }
+            }
+
+            @Override
+            public void onShotTimeout(String targetId, long shotTime) {
+                Log.w(TAG, "Shot timeout for target: " + targetId);
+                updateStatus("Shot missed or timeout: " + targetId);
+            }
+
+            @Override
+            public void onBallisticsCalculated(String targetId, BallisticsCalculator.BallisticsData ballistics) {
+                Log.d(TAG, String.format("Ballistics calculated for %s: MV=%.1f m/s, BC=%.3f",
+                        targetId, ballistics.muzzleVelocity, ballistics.ballisticCoefficient));
+
+                // Update the target detail view if it's currently showing this target
+                refreshDetailView();
+            }
+        });
+
+        // Update shot tracker with current self position
+        updateShotTrackerPosition();
     }
 
     /**
@@ -193,21 +248,29 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     private void initSettingsUI() {
         try {
             connectionStatusText = settingsView.findViewById(R.id.connectionStatusText);
+            diagButton = settingsView.findViewById(R.id.diagButton);
             scanDevicesButton = settingsView.findViewById(R.id.scanDevicesButton);
             scanTargetsButton = settingsView.findViewById(R.id.scanTargetsButton);
             resetAllTargetsButton = settingsView.findViewById(R.id.resetAllTargetsButton);
             removeAllTargetsButton = settingsView.findViewById(R.id.removeAllTargetsButton);
             calibrateAllButton = settingsView.findViewById(R.id.calibrateAllButton);
+            generateTestTargetsButton = settingsView.findViewById(R.id.generateTestTargetsButton);
             backButtonSettings = settingsView.findViewById(R.id.backButton);
             deviceListView = settingsView.findViewById(R.id.deviceListView);
             detailVerticalOffsetText = detailView.findViewById(R.id.detailVerticalOffsetText);
-            detailTiltAngleText      = detailView.findViewById(R.id.detailTiltAngleText);
-            elevProfileCaptionText   = detailView.findViewById(R.id.elevProfileCaptionText);
-            elevationProfileView     = detailView.findViewById(R.id.elevationProfileView);
+            detailTiltAngleText = detailView.findViewById(R.id.detailTiltAngleText);
+            elevProfileCaptionText = detailView.findViewById(R.id.elevProfileCaptionText);
+            elevationProfileView = detailView.findViewById(R.id.elevationProfileView);
             detailTargetElevationText = detailView.findViewById(R.id.detailTargetElevationText);
-            detailSelfElevationText   = detailView.findViewById(R.id.detailSelfElevationText);
+            detailSelfElevationText = detailView.findViewById(R.id.detailSelfElevationText);
 
             // Set click listeners
+            if (diagButton != null) {
+                diagButton.setOnClickListener(v -> showBLEDiagnostics());
+            } else {
+                Log.e(TAG, "SettingsUI: diagButton not found");
+            }
+
             if (scanDevicesButton != null) {
                 scanDevicesButton.setOnClickListener(v -> scanBluetoothDevices());
             } else {
@@ -238,6 +301,12 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
                 Log.e(TAG, "SettingsUI: calibrateAllButton not found");
             }
 
+            if (generateTestTargetsButton != null) {
+                generateTestTargetsButton.setOnClickListener(v -> generateTestTargets());
+            } else {
+                Log.e(TAG, "SettingsUI: generateTestTargetsButton not found");
+            }
+
             if (backButtonSettings != null) {
                 backButtonSettings.setOnClickListener(v -> showMainView());
             } else {
@@ -245,7 +314,7 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             }
 
             if (deviceListView != null) {
-                deviceAdapter = new BluetoothDeviceAdapter(pluginContext, this);
+                deviceAdapter = new BLEDeviceAdapter(pluginContext, this);
                 deviceListView.setAdapter(deviceAdapter);
             } else {
                 Log.e(TAG, "SettingsUI: deviceListView not found");
@@ -261,16 +330,17 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      */
     private void initDetailUI() {
         try {
-            detailTargetIdText       = detailView.findViewById(R.id.detailTargetIdText);
-            detailRangeText          = detailView.findViewById(R.id.detailRangeText);
-            detailBearingText        = detailView.findViewById(R.id.detailBearingText);
+            detailTargetIdText = detailView.findViewById(R.id.detailTargetIdText);
+            detailRangeText = detailView.findViewById(R.id.detailRangeText);
+            detailBearingText = detailView.findViewById(R.id.detailBearingText);
             detailVerticalOffsetText = detailView.findViewById(R.id.detailVerticalOffsetText);
-            detailTiltAngleText      = detailView.findViewById(R.id.detailTiltAngleText);
-            detailVoltageText        = detailView.findViewById(R.id.detailVoltageText);
-            elevProfileCaptionText   = detailView.findViewById(R.id.elevProfileCaptionText);
-            elevationProfileView     = detailView.findViewById(R.id.elevationProfileView);
-            detailBackButton         = detailView.findViewById(R.id.detailBackButton);
-
+            detailTiltAngleText = detailView.findViewById(R.id.detailTiltAngleText);
+            detailVoltageText = detailView.findViewById(R.id.detailVoltageText);
+            detailGpsQualityText = detailView.findViewById(R.id.detailGpsQualityText);
+            detailBallisticsText = detailView.findViewById(R.id.detailBallisticsText);
+            elevProfileCaptionText = detailView.findViewById(R.id.elevProfileCaptionText);
+            elevationProfileView = detailView.findViewById(R.id.elevationProfileView);
+            detailBackButton = detailView.findViewById(R.id.detailBackButton);
 
             if (detailBackButton != null) {
                 detailBackButton.setOnClickListener(v -> showMainView());
@@ -281,7 +351,6 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             Log.e(TAG, "Error initializing detail UI", e);
         }
     }
-
 
     // --- View Switching Logic ---
 
@@ -319,7 +388,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     }
 
     private void drawLineToTarget(Target target) {
-        if (target == null || target.getLocation() == null) return;
+        if (target == null || target.getLocation() == null)
+            return;
 
         try {
             // Get the target location
@@ -344,10 +414,9 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     private double groundDistance(GeoPoint p1, GeoPoint p2) {
         float[] results = new float[1];
         Location.distanceBetween(
-                p1.getLatitude(),  p1.getLongitude(),
-                p2.getLatitude(),  p2.getLongitude(),
-                results
-        );
+                p1.getLatitude(), p1.getLongitude(),
+                p2.getLatitude(), p2.getLongitude(),
+                results);
         return results[0];
     }
 
@@ -408,13 +477,15 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
 
         // Inside populateDetailView(Target target) method...
 
-        // ... (Keep steps 1, 2, 3 as they are for calculating ground, slant, bearing etc.)
+        // ... (Keep steps 1, 2, 3 as they are for calculating ground, slant, bearing
+        // etc.)
 
         // 3) Compute distances & angles
         double ground = horizontalDistance(me, tgt); // Assuming horizontalDistance is defined
-        double slant = slantDistance(me, tgt);    // Assuming slantDistance is defined
+        double slant = slantDistance(me, tgt); // Assuming slantDistance is defined
         double bearing = me.bearingTo(tgt);
-        if (bearing < 0) bearing += 360;
+        if (bearing < 0)
+            bearing += 360;
 
         // --- Determine MSL Altitudes ---
         // Target MSL (Assuming tgt.getAltitude() IS the raw MSL value)
@@ -439,12 +510,10 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             return;
         }
 
-
         // Use MSL altitudes for Vertical Offset and Tilt calculations for accuracy
         double vertOffMSL = targetMSL - selfMSL;
         double tiltMSL = Math.toDegrees(Math.atan2(vertOffMSL, ground));
         double voltage = target.getBatteryVoltage();
-
 
         // 4) Populate fields (using MSL-based calculations where appropriate)
         detailRangeText.setText(
@@ -474,6 +543,28 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         detailVoltageText.setText(
                 String.format(Locale.US, "Voltage:          %.2f V", voltage));
 
+        // Add GPS quality information if available
+        if (detailGpsQualityText != null) {
+            String gpsQuality = target.getGpsQualitySummary();
+            if (!gpsQuality.isEmpty()) {
+                detailGpsQualityText.setText("GPS: " + gpsQuality);
+                detailGpsQualityText.setVisibility(View.VISIBLE);
+            } else {
+                detailGpsQualityText.setVisibility(View.GONE);
+            }
+        }
+
+        // Add ballistics data if available
+        if (detailBallisticsText != null) {
+            if (target.getBallisticsData() != null && target.getBallisticsData().isValid()) {
+                detailBallisticsText.setText(String.format("BC: %.3f",
+                        target.getBallisticsData().getBallisticCoefficient()));
+                detailBallisticsText.setVisibility(View.VISIBLE);
+            } else {
+                detailBallisticsText.setVisibility(View.GONE);
+            }
+        }
+
         // 5) Elevation-profile caption (using MSL-based values)
         elevProfileCaptionText.setText(
                 String.format(Locale.US,
@@ -481,18 +572,20 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
                         vertOffMSL, ground, tiltMSL));
 
         // 6) Draw the chart using the MSL altitudes and horizontal distance
-        //    Call the correct method: setProfileData
-        Log.d(TAG, String.format("Calling setProfileData with: SelfMSL=%.1f, TargetMSL=%.1f, Dist=%.1f", selfMSL, targetMSL, ground));
+        // Call the correct method: setProfileData
+        Log.d(TAG, String.format("Calling setProfileData with: SelfMSL=%.1f, TargetMSL=%.1f, Dist=%.1f", selfMSL,
+                targetMSL, ground));
         elevationProfileView.setProfileData(selfMSL, targetMSL, ground);
     }
-
 
     /**
      * Helper function to get Self MSL robustly.
      * Compatible with older SDKs lacking AltitudeReference.MSL.
      * Needs access to MapView and EGM96 calculation.
+     * 
      * @param selfGeoPoint The GeoPoint of the self marker.
-     * @return MSL altitude in meters, or Double.NaN if cannot be determined reliably.
+     * @return MSL altitude in meters, or Double.NaN if cannot be determined
+     *         reliably.
      */
     private double getSelfMSL(GeoPoint selfGeoPoint) {
         if (selfGeoPoint == null) {
@@ -529,7 +622,9 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         // Check if the reference is explicitly HAE
         if (ref == GeoPoint.AltitudeReference.HAE) {
             // Calculate MSL from HAE using the known working call
-            double undulation = EGM96.getOffset(selfGeoPoint.getLatitude(), selfGeoPoint.getLongitude()); // <<< USE THE ACTUAL CALL HERE
+            double undulation = EGM96.getOffset(selfGeoPoint.getLatitude(), selfGeoPoint.getLongitude()); // <<< USE THE
+                                                                                                          // ACTUAL CALL
+                                                                                                          // HERE
             if (!Double.isNaN(undulation)) {
                 selfMSL = altitude - undulation;
                 Log.d(TAG, "getSelfMSL: Calculated from HAE: " + selfMSL);
@@ -549,24 +644,25 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         return selfMSL;
     }
 
+    private double horizontalDistance(GeoPoint p1, GeoPoint p2) {
+        if (p1 == null || p2 == null)
+            return 0;
 
-        private double horizontalDistance(GeoPoint p1, GeoPoint p2) {
-            // Implementation using p1.distanceTo(p2) or Haversine formula
-            if (p1 == null || p2 == null) return 0;
-            return p1.distanceTo(p2); // This calculates slant distance in core, need actual horizontal if required
-            // For true horizontal (approximated), you might need more complex geo math
-            // or just use slant distance if the difference is negligible for your use case.
-            // A simple approximation if elevation diff is small compared to distance:
-            // return Math.sqrt(Math.pow(p1.distanceTo(p2), 2) - Math.pow(p1.getAltitude() - p2.getAltitude(), 2));
-            // Let's assume p1.distanceTo is sufficient for now unless specified otherwise.
-        }
+        // Create copies of the points with the same altitude to get true horizontal
+        // distance
+        GeoPoint p1Horizontal = new GeoPoint(p1.getLatitude(), p1.getLongitude(), 0.0);
+        GeoPoint p2Horizontal = new GeoPoint(p2.getLatitude(), p2.getLongitude(), 0.0);
 
-        private double slantDistance(GeoPoint p1, GeoPoint p2) {
-            if (p1 == null || p2 == null) return 0;
-            // Use the built-in distanceTo which calculates slant distance
-            return p1.distanceTo(p2);
-        }
+        // Now distanceTo will give us true horizontal distance
+        return p1Horizontal.distanceTo(p2Horizontal);
+    }
 
+    private double slantDistance(GeoPoint p1, GeoPoint p2) {
+        if (p1 == null || p2 == null)
+            return 0;
+        // Use the built-in distanceTo which calculates slant distance
+        return p1.distanceTo(p2);
+    }
 
     // --- UI Update Helpers ---
 
@@ -575,22 +671,35 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      */
     private void updateConnectionStatus() {
         if (connectionStatusText != null) {
-            if (bluetoothManager != null && bluetoothManager.isConnected()) {
-                BluetoothDevice device = bluetoothManager.getConnectedDevice();
-                String deviceName = "Unknown Device";
-                try {
-                    if (device != null) {
-                        deviceName = device.getName();
-                        if (deviceName == null || deviceName.isEmpty()) {
-                            deviceName = device.getAddress();
+            if (bleManager != null && bleManager.hasConnectedDevices()) {
+                List<BluetoothDevice> connectedDevices = bleManager.getConnectedDevices();
+                if (!connectedDevices.isEmpty()) {
+                    StringBuilder status = new StringBuilder("Connected to: ");
+                    for (int i = 0; i < connectedDevices.size(); i++) {
+                        BluetoothDevice device = connectedDevices.get(i);
+                        String deviceName = "Unknown Device";
+                        try {
+                            if (device != null) {
+                                deviceName = device.getName();
+                                if (deviceName == null || deviceName.isEmpty()) {
+                                    deviceName = device.getAddress();
+                                }
+                            }
+                        } catch (SecurityException se) {
+                            Log.e(TAG, "BLE Permission error", se);
+                            deviceName = "Permission Error";
+                        }
+                        status.append(deviceName);
+                        if (i < connectedDevices.size() - 1) {
+                            status.append(", ");
                         }
                     }
-                } catch (SecurityException se) {
-                    Log.e(TAG, "BT Permission error", se);
-                    deviceName = "Permission Error";
+                    connectionStatusText.setText(status.toString());
+                    connectionStatusText.setTextColor(0xFF008800); // Greenish
+                } else {
+                    connectionStatusText.setText("Not connected");
+                    connectionStatusText.setTextColor(0xFFFF0000); // Red
                 }
-                connectionStatusText.setText("Connected to: " + deviceName);
-                connectionStatusText.setTextColor(0xFF008800); // Greenish
             } else {
                 connectionStatusText.setText("Not connected");
                 connectionStatusText.setTextColor(0xFFFF0000); // Red
@@ -612,9 +721,18 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
                 }
             });
         } else {
-            if (targetAdapter == null) Log.w(TAG, "targetAdapter null in updateTargetList");
-            if (targetManager == null) Log.w(TAG, "targetManager null in updateTargetList");
+            if (targetAdapter == null)
+                Log.w(TAG, "targetAdapter null in updateTargetList");
+            if (targetManager == null)
+                Log.w(TAG, "targetManager null in updateTargetList");
         }
+    }
+
+    /**
+     * Update the target adapter (alias for updateTargetList)
+     */
+    private void updateTargetAdapter() {
+        updateTargetList();
     }
 
     /**
@@ -640,20 +758,20 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      * Load paired Bluetooth devices into the settings list.
      */
     private void loadPairedDevices() {
-        if (deviceAdapter != null && bluetoothManager != null) {
+        if (deviceAdapter != null && bleManager != null) {
             deviceAdapter.clear();
-            if (bluetoothManager.isBluetoothSupported() && bluetoothManager.isBluetoothEnabled()) {
+            if (bleManager.isBluetoothSupported() && bleManager.isBluetoothEnabled()) {
                 try {
-                    List<BluetoothDevice> pairedDevices = bluetoothManager.getPairedDevices();
-                    if (pairedDevices != null && !pairedDevices.isEmpty()) {
-                        for (BluetoothDevice device : pairedDevices) {
+                    List<BluetoothDevice> bondedDevices = bleManager.getBondedDevices();
+                    if (bondedDevices != null && !bondedDevices.isEmpty()) {
+                        for (BluetoothDevice device : bondedDevices) {
                             deviceAdapter.addDevice(device);
                         }
                     } else {
-                        Log.d(TAG, "No paired devices.");
+                        Log.d(TAG, "No bonded devices.");
                     }
                 } catch (SecurityException e) {
-                    Log.e(TAG, "BT permission missing", e);
+                    Log.e(TAG, "BLE permission missing", e);
                     showToast("Bluetooth permission error");
                 }
             } else {
@@ -668,52 +786,79 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      */
     private void scanBluetoothDevices() {
         Log.d(TAG, "scanBluetoothDevices called");
-        if (bluetoothManager == null) {
-            Log.e(TAG, "BT Manager null");
-            showToast("BT Error");
+        if (bleManager == null) {
+            Log.e(TAG, "BLE Manager null");
+            showToast("BLE Error - Manager not initialized");
             return;
         }
-        if (!bluetoothManager.isBluetoothSupported()) {
-            showToast("Bluetooth not supported");
+
+        // Detailed pre-checks with user feedback
+        if (!bleManager.isBluetoothSupported()) {
+            showToast("Bluetooth LE not supported on this device");
+            updateStatus("BLE not supported");
             return;
         }
-        if (!bluetoothManager.isBluetoothEnabled()) {
-            showToast("Please enable Bluetooth");
+
+        if (!bleManager.isBluetoothEnabled()) {
+            showToast("Please enable Bluetooth first");
+            updateStatus("Bluetooth disabled");
             return;
         }
 
         if (deviceAdapter == null) {
-            deviceAdapter = new BluetoothDeviceAdapter(pluginContext, this);
+            deviceAdapter = new BLEDeviceAdapter(pluginContext, this);
             if (deviceListView != null) {
                 deviceListView.setAdapter(deviceAdapter);
             } else {
                 Log.e(TAG, "deviceListView is null");
-                showToast("UI Error");
+                showToast("UI Error - device list not found");
                 return;
             }
         }
 
         deviceAdapter.clear();
-        updateStatus("Scanning for BT devices...");
+        updateStatus("Scanning for BLE devices...");
+        showToast("Starting BLE scan...");
+
         try {
-            loadPairedDevices(); // Show paired first
-            bluetoothManager.startDiscovery(); // Scan for new
+            // Log diagnostics for debugging
+            bleManager.logDiagnostics();
+
+            // TEMPORARILY: Don't load paired devices first - just scan for BLE
+            // loadPairedDevices(); // Show bonded devices first
+
+            boolean scanStarted = bleManager.startScan(); // Start BLE scan
+            if (scanStarted) {
+                Log.d(TAG, "BLE scan started successfully");
+                showToast("BLE scan started - scanning for NEW devices only");
+                updateStatus("Scanning for NEW BLE devices... (10-30 sec)");
+            } else {
+                Log.e(TAG, "Failed to start BLE scan");
+                showToast("Failed to start BLE scan");
+                updateStatus("Scan failed - check permissions");
+            }
         } catch (SecurityException e) {
-            Log.e(TAG, "BT permission missing", e);
-            showToast("Bluetooth permission error");
+            Log.e(TAG, "BLE permission missing", e);
+            showToast("Bluetooth permission denied");
+            updateStatus("Permission error");
+        } catch (Exception e) {
+            Log.e(TAG, "Exception during BLE scan", e);
+            showToast("Scan error: " + e.getMessage());
+            updateStatus("Scan error");
         }
     }
 
     /**
-     * Send QUERY message via Bluetooth.
+     * Send QUERY message via BLE.
      */
     private void queryTargets() {
-        if (bluetoothManager == null || !bluetoothManager.isConnected()) {
-            showToast("Not connected");
+        if (bleManager == null || !bleManager.hasConnectedDevices()) {
+            showToast("No connected devices");
             return;
         }
         updateStatus("Scanning for targets...");
-        if (!bluetoothManager.writeData(MessageParser.createQueryMessage())) {
+        byte[] queryMessage = MessageParser.createQueryMessage();
+        if (!bleManager.writeToAllDevices(queryMessage)) {
             showToast("Send error");
             updateStatus("Error sending scan");
         }
@@ -766,8 +911,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      * Start calibration process (simple version: calibrates first target).
      */
     private void calibrateAllTargets() {
-        if (bluetoothManager == null || !bluetoothManager.isConnected()) {
-            showToast("Not connected");
+        if (bleManager == null || !bleManager.hasConnectedDevices()) {
+            showToast("No connected devices");
             return;
         }
         if (targetManager == null) {
@@ -783,10 +928,10 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         calibrateTarget(targets.get(0).getId());
     }
 
-//    private void clearTargetLine() {
-//        // Find and remove any target lines
-//        mapView.getMapGroup().deepRemoveItems("Path to*");
-//    }
+    // private void clearTargetLine() {
+    // // Find and remove any target lines
+    // mapView.getMapGroup().deepRemoveItems("Path to*");
+    // }
 
     /**
      * Start calibration for a specific target ID.
@@ -796,35 +941,37 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             Log.w(TAG, "Cannot calibrate null/empty ID");
             return;
         }
-        if (bluetoothManager == null || !bluetoothManager.isConnected()) {
-            showToast("Not connected");
+        if (bleManager == null || !bleManager.hasConnectedDevices()) {
+            showToast("No connected devices");
             return;
         }
         currentCalibrationTargetId = targetId;
         calibrationStartTime = System.currentTimeMillis();
         updateStatus("Calibrating target " + targetId + "...");
-        bluetoothManager.writeData(MessageParser.createCalibrationMessage(targetId));
+        bleManager.writeToAllDevices(MessageParser.createCalibrationMessage(targetId));
     }
 
     // --- Map Marker Logic ---
 
-
     /**
      * Refactored function to plot or update a map marker for a target,
      * using HAE for placement and MSL metadata for display.
-     * Creates/updates only if location is valid. Removes marker if location becomes invalid.
+     * Creates/updates only if location is valid. Removes marker if location becomes
+     * invalid.
      *
      * Assumes the containing class has:
      * - private MapView mapView;
      * - private Map<String, Marker> targetMarkers; // e.g., HashMap
-     * - private static final String TARGET_MAP_GROUP_NAME = "Target Markers"; // Or your preferred name
+     * - private static final String TARGET_MAP_GROUP_NAME = "Target Markers"; // Or
+     * your preferred name
      * - private static final String TAG = "YourClassName"; // Set your class TAG
      */
     private void updateTargetMarker(Target target) {
-        // Ensure necessary members are available (add null checks if needed in your context)
+        // Ensure necessary members are available (add null checks if needed in your
+        // context)
         // if (mapView == null || targetMarkers == null) {
-        //     Log.e(TAG, "MapView or targetMarkers map is null!");
-        //     return;
+        // Log.e(TAG, "MapView or targetMarkers map is null!");
+        // return;
         // }
         if (target == null) {
             Log.w(TAG, "updateTargetMarker called with null target.");
@@ -844,7 +991,10 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         // 2) Grab the raw GPS point (expecting MSL altitude)
         GeoPoint rawGeo = target.getLocation();
         Log.d(TAG, "Target ID: " + targetId + " | Raw Location: " + rawGeo);
-        boolean locationValid = rawGeo != null && GeoPoint.isValid(rawGeo.getLatitude(), rawGeo.getLongitude()); // More robust validity check
+        boolean locationValid = rawGeo != null && GeoPoint.isValid(rawGeo.getLatitude(), rawGeo.getLongitude()); // More
+                                                                                                                 // robust
+                                                                                                                 // validity
+                                                                                                                 // check
 
         if (!locationValid) {
             Log.d(TAG, "Target location invalid or null for ID: " + targetId + ". Removing marker.");
@@ -856,7 +1006,7 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             } else {
                 // Attempt removal by UID directly from group just in case map is out of sync
                 PointMapItem item = (PointMapItem) targetGroup.deepFindItem("uid", markerUID);
-                if(item instanceof Marker) {
+                if (item instanceof Marker) {
                     targetGroup.removeItem(item);
                     Log.d(TAG, "Removed marker by UID lookup: " + markerUID);
                 }
@@ -868,14 +1018,24 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         double lat = rawGeo.getLatitude();
         double lon = rawGeo.getLongitude();
         double rawMSL = rawGeo.getAltitude(); // Assuming this is MSL from your target source
+
+        // 4) Convert MSL to HAE for proper placement
+        double haeAltitude = rawMSL; // Default to MSL if conversion fails
+        if (!Double.isNaN(rawMSL)) {
+            try {
+                // Get the geoid offset (undulation) for this location
+                double undulation = EGM96.getOffset(lat, lon);
+                if (!Double.isNaN(undulation)) {
+                    haeAltitude = rawMSL + undulation; // HAE = MSL + undulation
+                } else {
+                    Log.w(TAG, "EGM96 lookup returned NaN for target " + targetId + ", using MSL as HAE");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error calculating HAE for target " + targetId + ": " + e.getMessage());
+            }
+        }
+
         Log.d(TAG, "Target ID: " + targetId + " | Raw Location: " + lat + ", " + lon + " | Raw MSL: " + rawMSL + " m");
-
-        // 3) Compute geoid undulation (meters) using your EGM96 implementation
-        double undulation = EGM96.getOffset(lat, lon); // Make sure EGM96 class/method is accessible
-        Log.d(TAG, "Target ID: " + targetId + " | Geoid Undulation: " + undulation + " m");
-
-        // 4) Calculate HAE altitude = MSL + undulation
-        double haeAltitude = rawMSL + undulation;
         Log.d(TAG, "Target ID: " + targetId + " | Calculated HAE: " + haeAltitude + " m");
 
         // 5) Build the GeoPoint using HAE for placement
@@ -888,7 +1048,7 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             // Marker doesn't exist in our tracking map, try finding it in the group first
             PointMapItem existingItem = (PointMapItem) targetGroup.deepFindItem("uid", markerUID);
             if (existingItem instanceof Marker) {
-                Log.d(TAG,"Found existing marker in group for " + targetId + ", updating reference.");
+                Log.d(TAG, "Found existing marker in group for " + targetId + ", updating reference.");
                 marker = (Marker) existingItem;
                 targetMarkers.put(targetId, marker); // Add to tracking map
                 marker.setPoint(placementPoint); // Update position
@@ -920,13 +1080,19 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         Marker selfMarker = mapView.getSelfMarker(); // Or however you get the self marker
         if (selfMarker != null && selfMarker.getPoint() != null) {
             GeoPoint selfPoint = selfMarker.getPoint();
-            // Use the 'height' metadata if available for self, otherwise use point altitude (which might be HAE)
+            // Use the 'height' metadata if available for self, otherwise use point altitude
+            // (which might be HAE)
             double selfMSL = selfMarker.getMetaDouble("height", selfPoint.getAltitude());
-            // If selfPoint altitude was HAE and 'height' wasn't set, this comparison is less accurate.
+            // If selfPoint altitude was HAE and 'height' wasn't set, this comparison is
+            // less accurate.
             // For best results, ensure self marker also has 'height' set to MSL.
-            if (selfPoint.getAltitudeReference() == GeoPoint.AltitudeReference.HAE && !selfMarker.hasMetaValue("height")) {
-                Log.w(TAG,"Self marker altitude appears to be HAE, elevation difference calculation might be less accurate without MSL height metadata.");
-                // Optionally calculate self MSL from HAE if needed: selfMSL = selfPoint.getAltitude() - EGM96.getOffset(selfPoint.getLatitude(), selfPoint.getLongitude());
+            if (selfPoint.getAltitudeReference() == GeoPoint.AltitudeReference.HAE
+                    && !selfMarker.hasMetaValue("height")) {
+                Log.w(TAG,
+                        "Self marker altitude appears to be HAE, elevation difference calculation might be less accurate without MSL height metadata.");
+                // Optionally calculate self MSL from HAE if needed: selfMSL =
+                // selfPoint.getAltitude() - EGM96.getOffset(selfPoint.getLatitude(),
+                // selfPoint.getLongitude());
             }
 
             double elevDiff = rawMSL - selfMSL;
@@ -934,13 +1100,12 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             remarks.append(String.format(Locale.US, "\nElev diff: %.1f m %s",
                     Math.abs(elevDiff), elevDiff >= 0 ? "Above" : "Below"));
         } else {
-            Log.w(TAG,"Could not get self marker location to calculate elevation difference.");
+            Log.w(TAG, "Could not get self marker location to calculate elevation difference.");
         }
 
         double voltage = target.getBatteryVoltage();
-        if (voltage >= 0) { // Assuming negative voltage is invalid
+        if (voltage >= 0) // Assuming negative voltage is invalid
             remarks.append(String.format(Locale.US, "\nVoltage: %.2f V", voltage));
-        }
 
         marker.setMetaString("remarks", remarks.toString());
         marker.setTitle("Target " + targetId + " (" + target.getHitCount() + ")"); // Update title
@@ -953,7 +1118,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
 
     /**
      * Finds or creates a map group. (Helper function, similar to MarkerCreator)
-     * @param mapView The MapView instance.
+     * 
+     * @param mapView   The MapView instance.
      * @param groupName The desired name for the map group.
      * @return The MapGroup or null if the root group is unavailable.
      */
@@ -973,7 +1139,7 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
                 group.setMetaBoolean("visible", true);
                 group.setMetaBoolean("addToObjList", false); // Prevent group itself showing in Overlay Mgr?
                 // Persist group properties if needed
-                //group.persist(mapView.getMapEventDispatcher(), null, this.getClass());
+                // group.persist(mapView.getMapEventDispatcher(), null, this.getClass());
                 Log.d(TAG, "Created map group: " + groupName);
             } else {
                 Log.e(TAG, "Failed to create map group: " + groupName);
@@ -982,13 +1148,9 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         return group;
     }
 
-
-
-
-    public BluetoothSerialManager getBluetoothManager() {
-        return bluetoothManager;
+    public BLEManager getBLEManager() {
+        return bleManager;
     }
-
 
     // --- Helper Methods ---
 
@@ -996,8 +1158,10 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
      * Helper method to safely convert an object to double.
      */
     private double safeConvertToDouble(Object value) {
-        if (value == null) return 0.0;
-        if (value instanceof Double) return (Double) value;
+        if (value == null)
+            return 0.0;
+        if (value instanceof Double)
+            return (Double) value;
         try {
             return Double.parseDouble(String.valueOf(value));
         } catch (NumberFormatException e) {
@@ -1006,16 +1170,15 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         }
     }
 
-
     /**
      * Clean up resources when the plugin is disposed.
      */
     @Override
     public void disposeImpl() {
         Log.d(TAG, "Disposing HitIndicatorDropDownReceiver");
-        if (bluetoothManager != null) {
-            bluetoothManager.destroy();
-            bluetoothManager = null;
+        if (bleManager != null) {
+            bleManager.destroy();
+            bleManager = null;
         }
         if (!targetMarkers.isEmpty() && mapView != null && mapView.getRootGroup() != null) {
             for (Marker marker : targetMarkers.values()) {
@@ -1031,18 +1194,22 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         deviceAdapter = null;
     }
 
-    //==============================================================================
+    // ==============================================================================
     // Interface Implementations
-    //==============================================================================
+    // ==============================================================================
 
-    /**************************** DEVICE CONNECT LISTENER METHODS *****************************/
+    /****************************
+     * DEVICE CONNECT LISTENER METHODS
+     *****************************/
     @Override
     public void onConnectDevice(final BluetoothDevice device) {
-        if (device == null || bluetoothManager == null) return;
-        if (bluetoothManager.isConnected() && bluetoothManager.getConnectedDevice() != null &&
-                bluetoothManager.getConnectedDevice().getAddress().equals(device.getAddress())) {
+        if (device == null || bleManager == null)
+            return;
+
+        // Check if already connected to this device
+        if (bleManager.isConnectedToDevice(device)) {
             Log.d(TAG, "Already connected to this device, disconnecting.");
-            bluetoothManager.disconnect();
+            bleManager.disconnect(device);
             return;
         }
 
@@ -1059,7 +1226,7 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         updateStatus("Connecting to " + deviceName + "...");
 
         new Thread(() -> {
-            boolean success = bluetoothManager.connect(device);
+            boolean success = bleManager.connect(device);
             mapView.post(() -> {
                 updateConnectionStatus();
                 if (!success) {
@@ -1070,9 +1237,25 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         }).start();
     }
 
-    /**************************** BLUETOOTH SERIAL LISTENER METHODS *****************************/
+    /****************************
+     * BLE LISTENER METHODS
+     *****************************/
     @Override
-    public void onConnected(BluetoothDevice device) {
+    public void onDeviceDiscovered(BluetoothDevice device, int rssi) {
+        Log.i(TAG, "NEW BLE DEVICE DISCOVERED: " + (device != null ? device.getAddress() : "null") + " RSSI: " + rssi);
+        if (deviceAdapter != null && device != null) {
+            mapView.post(() -> {
+                deviceAdapter.addDevice(device);
+                showToast("Found BLE device: " + device.getAddress());
+                Log.i(TAG, "Added device to adapter: " + device.getAddress());
+            });
+        } else {
+            Log.e(TAG, "Cannot add device - adapter: " + (deviceAdapter != null) + ", device: " + (device != null));
+        }
+    }
+
+    @Override
+    public void onDeviceConnected(BluetoothDevice device) {
         String name;
         try {
             name = device.getName();
@@ -1087,39 +1270,55 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     }
 
     @Override
-    public void onDisconnected() {
-        updateStatus("Disconnected");
+    public void onDeviceDisconnected(BluetoothDevice device) {
+        String name;
+        try {
+            name = device.getName();
+            if (name == null || name.isEmpty()) {
+                name = device.getAddress();
+            }
+        } catch (SecurityException e) {
+            name = "device";
+        }
+        updateStatus("Disconnected from " + name);
         mapView.post(this::updateConnectionStatus);
     }
 
     @Override
-    public void onDataReceived(byte[] data) {
-        if (messageParser != null) messageParser.processData(data);
-    }
-
-    @Override
-    public void onError(String message) {
-        updateStatus("Comm Error: " + message);
-    }
-
-    @Override
-    public void onDeviceDiscovered(BluetoothDevice device) {
-        if (deviceAdapter != null && device != null) {
-            mapView.post(() -> deviceAdapter.addDevice(device));
+    public void onDataReceived(BluetoothDevice device, String characteristicUuid, byte[] data) {
+        if (messageParser != null) {
+            // Process data based on characteristic UUID
+            if (BLEManager.POSITION_CHARACTERISTIC_UUID.toString().equals(characteristicUuid) ||
+                    BLEManager.HIT_CHARACTERISTIC_UUID.toString().equals(characteristicUuid) ||
+                    BLEManager.BATTERY_CHARACTERISTIC_UUID.toString().equals(characteristicUuid) ||
+                    BLEManager.CALIBRATION_CHARACTERISTIC_UUID.toString().equals(characteristicUuid)) {
+                messageParser.processData(data);
+            }
         }
     }
 
     @Override
-    public void onDiscoveryFinished() {
-        updateStatus("Bluetooth scan finished");
+    public void onError(String message) {
+        updateStatus("BLE Error: " + message);
     }
 
+    @Override
+    public void onScanStarted() {
+        updateStatus("BLE scan started");
+    }
 
+    @Override
+    public void onScanStopped() {
+        updateStatus("BLE scan stopped");
+    }
 
-    /**************************** MESSAGE PARSER LISTENER METHODS *****************************/
+    /****************************
+     * MESSAGE PARSER LISTENER METHODS
+     *****************************/
     @Override
     public void onPositionMessage(String id, GeoPoint location, double voltage) {
-        if (targetManager == null) return;
+        if (targetManager == null)
+            return;
         Target target = targetManager.updateTargetPosition(id, location);
         targetManager.updateTargetVoltage(id, voltage);
         mapView.post(() -> {
@@ -1130,8 +1329,44 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
     }
 
     @Override
+    public void onPositionMessageEnhanced(String id, GeoPoint location, double voltage,
+            int satellites, double hdop, String altitudeRef) {
+        if (targetManager == null)
+            return;
+
+        Target target = targetManager.updateTargetPosition(id, location);
+        targetManager.updateTargetVoltage(id, voltage);
+
+        // Update GPS quality information
+        target.setGpsQuality(satellites, hdop, altitudeRef);
+
+        // Update shot tracker with enhanced position
+        if (shotTracker != null) {
+            shotTracker.updateTargetPosition(id, location);
+        }
+
+        mapView.post(() -> {
+            String gpsQuality = target.isGpsQualityGood() ? "Good" : "Poor";
+            updateStatus(String.format("Pos: %s V:%.2f %s (%s)",
+                    id, voltage, gpsQuality, altitudeRef));
+            updateTargetMarker(target);
+            updateTargetList();
+
+            // Log detailed GPS quality for debugging
+            Log.d(TAG, String.format("Target %s GPS: %s", id, target.getGpsQualitySummary()));
+
+            // Warn if GPS quality is poor
+            if (!target.isGpsQualityGood()) {
+                Log.w(TAG, String.format("Poor GPS quality for target %s: Sats=%d, HDOP=%.1f",
+                        id, satellites, hdop));
+            }
+        });
+    }
+
+    @Override
     public void onHitMessage(String id) {
-        if (targetManager == null) return;
+        if (targetManager == null)
+            return;
         Target target = targetManager.processHit(id); // Creates if not exists
         mapView.post(() -> {
             updateStatus("Hit: " + id + " (Total: " + target.getHitCount() + ")");
@@ -1142,7 +1377,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
 
     @Override
     public void onCalibrationResponse(String id, long roundTripTime) {
-        if (targetManager == null) return;
+        if (targetManager == null)
+            return;
         if (id != null && id.equals(currentCalibrationTargetId) && calibrationStartTime > 0) {
             long elapsedTime = System.currentTimeMillis() - calibrationStartTime;
             targetManager.setCalibrationTime(id, elapsedTime);
@@ -1150,7 +1386,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             mapView.post(() -> {
                 updateStatus(status);
                 Target target = targetManager.getTarget(id);
-                if (target != null) updateTargetMarker(target);
+                if (target != null)
+                    updateTargetMarker(target);
                 updateTargetList();
             });
             currentCalibrationTargetId = null;
@@ -1162,7 +1399,9 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         updateStatus("Parse error: " + error);
     }
 
-    /**************************** DROP DOWN RECEIVER METHODS *****************************/
+    /****************************
+     * DROP DOWN RECEIVER METHODS
+     *****************************/
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent.getAction();
@@ -1172,7 +1411,9 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         }
     }
 
-    /**************************** DROP DOWN LISTENER METHODS *****************************/
+    /****************************
+     * DROP DOWN LISTENER METHODS
+     *****************************/
     @Override
     public void onDropDownSelectionRemoved() {
         Log.d(TAG, "DropDown Selection Removed");
@@ -1184,7 +1425,8 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         if (v) {
             if (currentView == VIEW_MAIN) {
                 GeoPoint self = mapView.getSelfMarker().getPoint();
-                if (self != null && targetAdapter != null) targetAdapter.setMyLocation(self);
+                if (self != null && targetAdapter != null)
+                    targetAdapter.setMyLocation(self);
                 updateTargetList();
                 updateConnectionStatus();
                 loadPairedDevices();
@@ -1204,14 +1446,17 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
 
     @Override
     public void onDropDownClose() {
-        //clearTargetLine();
+        // clearTargetLine();
         Log.d(TAG, "DropDown Closed");
     }
 
-    /**************************** TARGET ACTION LISTENER METHODS *****************************/
+    /****************************
+     * TARGET ACTION LISTENER METHODS
+     *****************************/
     @Override
     public void onResetTarget(Target target) {
-        if (target == null || targetManager == null) return;
+        if (target == null || targetManager == null)
+            return;
         Log.d(TAG, "Resetting hits for " + target.getId());
         targetManager.resetHitCount(target.getId());
         mapView.post(() -> {
@@ -1220,7 +1465,6 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
             updateTargetList();
         });
     }
-
 
     @Override
     public void onLocateTarget(Target target) {
@@ -1242,8 +1486,228 @@ public class HitIndicatorDropDownReceiver extends DropDownReceiver implements
         }
     }
 
+    /**
+     * Show BLE diagnostics information
+     */
+    private void showBLEDiagnostics() {
+        if (bleManager == null) {
+            showToast("BLE Manager not initialized");
+            return;
+        }
 
+        String diagnostics = bleManager.getPermissionStatus();
+        Log.i(TAG, "BLE Diagnostics:\n" + diagnostics);
 
+        // Show in a more user-friendly way
+        StringBuilder userMessage = new StringBuilder();
+        userMessage.append("BLE Status:\n");
 
+        if (bleManager.isBLESupported()) {
+            userMessage.append("✓ BLE Supported\n");
+        } else {
+            userMessage.append("✗ BLE NOT Supported\n");
+        }
 
+        if (bleManager.isBluetoothEnabled()) {
+            userMessage.append("✓ Bluetooth Enabled\n");
+        } else {
+            userMessage.append("✗ Bluetooth Disabled\n");
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            userMessage.append("Android 12+ Permissions:\n");
+            boolean scanPerm = ContextCompat.checkSelfPermission(pluginContext,
+                    Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
+            boolean connectPerm = ContextCompat.checkSelfPermission(pluginContext,
+                    Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+
+            userMessage.append(scanPerm ? "✓" : "✗").append(" SCAN Permission\n");
+            userMessage.append(connectPerm ? "✓" : "✗").append(" CONNECT Permission\n");
+        } else {
+            userMessage.append("Legacy Android Permissions:\n");
+            boolean locationPerm = ContextCompat.checkSelfPermission(pluginContext,
+                    Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+            userMessage.append(locationPerm ? "✓" : "✗").append(" Location Permission\n");
+        }
+
+        // Update status and show toast
+        updateStatus(userMessage.toString().replace("\n", " | "));
+        showToast("Check logs for full diagnostics");
+
+        // Also log the full diagnostics
+        bleManager.logDiagnostics();
+    }
+
+    @Override
+    public void onShotFiredMessage(String targetId, long timestamp) {
+        Log.d(TAG, "Shot fired message received for target: " + targetId);
+
+        if (shotTracker != null) {
+            shotTracker.recordShotFired(targetId, timestamp);
+        }
+
+        mapView.post(() -> {
+            updateStatus("Shot fired at " + targetId);
+        });
+    }
+
+    /**
+     * Update shot tracker with current self position for accurate ballistics
+     * calculations
+     */
+    private void updateShotTrackerPosition() {
+        if (shotTracker == null)
+            return;
+
+        // Get current self position from ATAK
+        try {
+            // Try to get position from ATAK's self marker
+            Marker selfMarker = mapView.getSelfMarker();
+            if (selfMarker != null) {
+                GeoPoint selfPos = selfMarker.getPoint();
+                shotTracker.updateFiringPosition(selfPos);
+                Log.d(TAG, "Shot tracker position updated: " + selfPos);
+            } else {
+                Log.w(TAG, "Could not get self marker for shot tracker");
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error updating shot tracker position: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Refresh the detail view if currently visible
+     */
+    private void refreshDetailView() {
+        if (currentView == VIEW_DETAIL && detailView != null && detailView.getVisibility() == View.VISIBLE) {
+            // Find the currently displayed target and refresh its data
+            List<Target> targets = targetManager.getAllTargets();
+            if (!targets.isEmpty()) {
+                // For now, refresh with the first target - in a real implementation,
+                // you'd track which target is currently being displayed
+                populateDetailView(targets.get(0));
+            }
+        }
+    }
+
+    /**
+     * Generate test targets with fake data for testing the interface.
+     * Creates targets at various distances and bearings from your location:
+     * 38°17'04.7"N 77°08'38.5"W
+     */
+    private void generateTestTargets() {
+        Log.d(TAG, "Generating test targets with fake data");
+
+        if (targetManager == null) {
+            Log.e(TAG, "targetManager null, cannot generate test targets");
+            showToast("Error: Target manager not available");
+            return;
+        }
+
+        // Your location: 38°17'04.7"N 77°08'38.5"W
+        double baseLat = 38.284639; // 38°17'04.7"N
+        double baseLon = -77.144028; // 77°08'38.5"W
+        double baseAltMSL = 100.0; // Approximate MSL altitude for your area
+
+        updateStatus("Generating test targets...");
+        showToast("Creating test targets around your location");
+
+        // Test Target 1: 300 yards NE (bearing ~45°)
+        double target1Lat = baseLat + (300 * 0.9144 * Math.cos(Math.toRadians(45))) / 111111.0; // Convert yards to
+                                                                                                // meters to degrees
+        double target1Lon = baseLon
+                + (300 * 0.9144 * Math.sin(Math.toRadians(45))) / (111111.0 * Math.cos(Math.toRadians(baseLat)));
+        GeoPoint target1Pos = new GeoPoint(target1Lat, target1Lon, baseAltMSL + 5.0); // 5m higher
+
+        Target target1 = targetManager.updateTargetPosition("T001", target1Pos);
+        targetManager.updateTargetVoltage("T001", 4.1);
+        target1.setGpsQuality(12, 1.2, "MSL"); // Good GPS quality
+        target1.incrementHitCount(); // One hit
+        target1.incrementHitCount(); // Two hits
+
+        // Test Target 2: 500 yards SW (bearing ~225°)
+        double target2Lat = baseLat + (500 * 0.9144 * Math.cos(Math.toRadians(225))) / 111111.0;
+        double target2Lon = baseLon
+                + (500 * 0.9144 * Math.sin(Math.toRadians(225))) / (111111.0 * Math.cos(Math.toRadians(baseLat)));
+        GeoPoint target2Pos = new GeoPoint(target2Lat, target2Lon, baseAltMSL - 8.0); // 8m lower
+
+        Target target2 = targetManager.updateTargetPosition("T002", target2Pos);
+        targetManager.updateTargetVoltage("T002", 3.8);
+        target2.setGpsQuality(8, 2.1, "MSL"); // Fair GPS quality
+        target2.incrementHitCount(); // One hit
+
+        // Test Target 3: 800 yards N (bearing 0°)
+        double target3Lat = baseLat + (800 * 0.9144 * Math.cos(Math.toRadians(0))) / 111111.0;
+        double target3Lon = baseLon
+                + (800 * 0.9144 * Math.sin(Math.toRadians(0))) / (111111.0 * Math.cos(Math.toRadians(baseLat)));
+        GeoPoint target3Pos = new GeoPoint(target3Lat, target3Lon, baseAltMSL + 15.0); // 15m higher
+
+        Target target3 = targetManager.updateTargetPosition("T003", target3Pos);
+        targetManager.updateTargetVoltage("T003", 4.2);
+        target3.setGpsQuality(15, 0.8, "MSL"); // Excellent GPS quality
+        // No hits yet
+
+        // Test Target 4: 1000 yards SE (bearing ~135°)
+        double target4Lat = baseLat + (1000 * 0.9144 * Math.cos(Math.toRadians(135))) / 111111.0;
+        double target4Lon = baseLon
+                + (1000 * 0.9144 * Math.sin(Math.toRadians(135))) / (111111.0 * Math.cos(Math.toRadians(baseLat)));
+        GeoPoint target4Pos = new GeoPoint(target4Lat, target4Lon, baseAltMSL - 3.0); // 3m lower
+
+        Target target4 = targetManager.updateTargetPosition("T004", target4Pos);
+        targetManager.updateTargetVoltage("T004", 3.5); // Low battery
+        target4.setGpsQuality(6, 3.5, "MSL"); // Poor GPS quality
+        target4.incrementHitCount(); // One hit
+        target4.incrementHitCount(); // Two hits
+        target4.incrementHitCount(); // Three hits
+        target4.incrementHitCount(); // Four hits
+
+        // Test Target 5: 600 yards W (bearing 270°) - with ballistics data
+        double target5Lat = baseLat + (600 * 0.9144 * Math.cos(Math.toRadians(270))) / 111111.0;
+        double target5Lon = baseLon
+                + (600 * 0.9144 * Math.sin(Math.toRadians(270))) / (111111.0 * Math.cos(Math.toRadians(baseLat)));
+        GeoPoint target5Pos = new GeoPoint(target5Lat, target5Lon, baseAltMSL + 10.0); // 10m higher
+
+        Target target5 = targetManager.updateTargetPosition("T005", target5Pos);
+        targetManager.updateTargetVoltage("T005", 4.0);
+        target5.setGpsQuality(11, 1.5, "MSL"); // Good GPS quality
+        target5.incrementHitCount(); // One hit
+
+        // Add some fake ballistics data to target 5
+        try {
+            // Create fake ballistics data with reasonable values
+            BallisticsCalculator.BallisticsData fakeBallistics = new BallisticsCalculator.BallisticsData();
+            fakeBallistics.muzzleVelocity = 850.0; // m/s (typical rifle)
+            fakeBallistics.ballisticCoefficient = 0.485; // Typical BC for .308 Winchester
+            fakeBallistics.ammunitionType = ".308 Winchester";
+            fakeBallistics.bulletWeight = 175.0; // grams
+            fakeBallistics.temperature = 20.0; // °C
+            fakeBallistics.pressure = 101300.0; // Pa (1013 hPa)
+            fakeBallistics.range = 600 * 0.9144; // Convert 600 yards to meters
+            fakeBallistics.timeOfFlight = 0.75; // 750ms time of flight
+
+            target5.setBallisticsData(fakeBallistics);
+            target5.setAverageTimeOfFlight(0.75); // 750ms time of flight
+
+            Log.d(TAG, "Added fake ballistics data to target T005");
+        } catch (Exception e) {
+            Log.w(TAG, "Could not add ballistics data to test target: " + e.getMessage());
+        }
+
+        // Update UI
+        mapView.post(() -> {
+            // Update all target markers on the map
+            updateTargetList();
+            for (Target target : targetManager.getAllTargets()) {
+                updateTargetMarker(target);
+            }
+
+            // Show main view to see the results
+            showMainView();
+        });
+
+        updateStatus("Generated 5 test targets (300-1000 yards)");
+        showToast("Test targets created! Check main view.");
+
+        Log.d(TAG, String.format("Test targets created around %.6f, %.6f", baseLat, baseLon));
+    }
 }
