@@ -14,6 +14,7 @@ public class MessageParser {
     // Message types
     public static final String TYPE_POSITION = "POS";
     public static final String TYPE_HIT = "HIT";
+    public static final String TYPE_SHOT_FIRED = "SHOT"; // New message type for rifle shot detection
     public static final String TYPE_CALIBRATE_ACK = "CALACK";
 
     // Outgoing message types
@@ -23,8 +24,16 @@ public class MessageParser {
 
     public interface MessageListener {
         void onPositionMessage(String id, GeoPoint location, double voltage);
+
+        void onPositionMessageEnhanced(String id, GeoPoint location, double voltage, int satellites, double hdop,
+                String altitudeRef);
+
         void onHitMessage(String id);
+
+        void onShotFiredMessage(String targetId, long timestamp); // New callback for shot detection
+
         void onCalibrationResponse(String id, long roundTripTime);
+
         void onParseError(String error);
     }
 
@@ -73,6 +82,10 @@ public class MessageParser {
                     processHitMessage(parts);
                     break;
 
+                case TYPE_SHOT_FIRED:
+                    processShotFiredMessage(parts);
+                    break;
+
                 case TYPE_CALIBRATE_ACK:
                     processCalibrationAck(parts);
                     break;
@@ -88,8 +101,10 @@ public class MessageParser {
     }
 
     private void processPositionMessage(String[] parts) {
+        // Support both old format: POS,ID,LAT,LON,ALT,BATT
+        // and new enhanced format: POS,ID,LAT,LON,ALT,BATT,SATS,HDOP,ALTREF
         if (parts.length < 6) {
-            notifyError("Invalid position message format");
+            notifyError("Invalid position message format - minimum 6 parts required");
             return;
         }
 
@@ -102,12 +117,28 @@ public class MessageParser {
 
             GeoPoint location = new GeoPoint(lat, lon, alt);
 
-            if (listener != null) {
-                listener.onPositionMessage(id, location, voltage);
+            // Check if enhanced format with GPS quality data
+            if (parts.length >= 9) {
+                int satellites = Integer.parseInt(parts[6]);
+                double hdop = Double.parseDouble(parts[7]);
+                String altitudeRef = parts[8]; // "MSL" or "HAE"
+
+                Log.d(TAG, String.format("Enhanced position: %s, Sats: %d, HDOP: %.1f, AltRef: %s",
+                        id, satellites, hdop, altitudeRef));
+
+                if (listener != null) {
+                    listener.onPositionMessageEnhanced(id, location, voltage, satellites, hdop, altitudeRef);
+                }
+            } else {
+                // Legacy format
+                Log.d(TAG, "Legacy position message for: " + id);
+                if (listener != null) {
+                    listener.onPositionMessage(id, location, voltage);
+                }
             }
 
         } catch (NumberFormatException e) {
-            notifyError("Invalid position coordinates");
+            notifyError("Invalid position coordinates: " + e.getMessage());
         }
     }
 
@@ -121,6 +152,29 @@ public class MessageParser {
 
         if (listener != null) {
             listener.onHitMessage(id);
+        }
+    }
+
+    private void processShotFiredMessage(String[] parts) {
+        if (parts.length < 3) {
+            notifyError("Invalid shot fired message format - expected: SHOT,targetId,timestamp");
+            return;
+        }
+
+        String targetId = parts[1];
+        long timestamp;
+
+        try {
+            timestamp = Long.parseLong(parts[2]);
+        } catch (NumberFormatException e) {
+            notifyError("Invalid timestamp in shot fired message");
+            return;
+        }
+
+        Log.d(TAG, "Shot fired message received: target=" + targetId + ", timestamp=" + timestamp);
+
+        if (listener != null) {
+            listener.onShotFiredMessage(targetId, timestamp);
         }
     }
 
@@ -148,6 +202,14 @@ public class MessageParser {
 
     public static byte[] createReadyMessage(String id) {
         return createMessage(TYPE_READY + "," + id);
+    }
+
+    public static byte[] createShotExpectedMessage(String targetId, long timestamp) {
+        return createMessage("EXPECT," + targetId + "," + timestamp);
+    }
+
+    public static byte[] createBallisticsRequestMessage(String targetId) {
+        return createMessage("BALLISTICS," + targetId);
     }
 
     private static byte[] createMessage(String content) {

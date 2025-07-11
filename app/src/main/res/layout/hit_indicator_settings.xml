@@ -5,11 +5,11 @@
     android:layout_height="match_parent"
     android:padding="16dp">
 
-    <!-- Bluetooth Connection Section -->
+    <!-- BLE Connection Section -->
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Bluetooth Connection"
+        android:text="BLE Connection"
         android:textStyle="bold"
         android:textSize="18sp"
         android:layout_marginBottom="8dp"/>
@@ -27,6 +27,13 @@
             android:layout_weight="1"
             android:text="Not connected"
             android:textColor="#FF0000"/>
+
+        <Button
+            android:id="@+id/diagButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Diag"
+            android:layout_marginEnd="4dp"/>
 
         <Button
             android:id="@+id/scanDevicesButton"
@@ -94,6 +101,22 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Calibrate All Targets"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Testing Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Testing"
+            android:textStyle="bold"
+            android:textSize="18sp"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/generateTestTargetsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Generate Test Targets"
             android:layout_marginBottom="16dp"/>
 
         <!-- Back Button -->

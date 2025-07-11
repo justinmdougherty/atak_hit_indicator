@@ -12,6 +12,16 @@ public class Target implements Parcelable {
     private long lastSeen;
     private long calibrationTime;
     private double batteryVoltage;
+    private BallisticsCalculator.BallisticsData ballisticsData; // New field for ballistics
+    private int shotsFired; // Track shots fired at this target
+    private long lastShotTime; // When the last shot was fired
+    private double averageTimeOfFlight; // Average ToF for this target
+
+    // GPS Quality tracking
+    private int satelliteCount; // Number of satellites used
+    private double hdop; // Horizontal Dilution of Precision
+    private String altitudeReference; // "MSL" or "HAE"
+    private boolean hasGpsQuality; // Whether GPS quality data is available
 
     // Constructors
     public Target(String id) {
@@ -20,6 +30,18 @@ public class Target implements Parcelable {
         this.lastSeen = System.currentTimeMillis();
         this.calibrationTime = 0;
         this.batteryVoltage = -1.0; // Default value (unknown)
+        this.ballisticsData = null;
+        this.shotsFired = 0;
+        this.lastShotTime = 0;
+        this.averageTimeOfFlight = 0.0;
+        this.satelliteCount = 0;
+        this.hdop = 99.9; // High value indicates poor quality
+        this.altitudeReference = "Unknown";
+        this.hasGpsQuality = false;
+        this.satelliteCount = 0;
+        this.hdop = 0.0;
+        this.altitudeReference = "MSL";
+        this.hasGpsQuality = false;
     }
 
     public Target(String id, GeoPoint location) {
@@ -40,6 +62,14 @@ public class Target implements Parcelable {
         lastSeen = in.readLong();
         calibrationTime = in.readLong();
         batteryVoltage = in.readDouble();
+        shotsFired = in.readInt();
+        lastShotTime = in.readLong();
+        averageTimeOfFlight = in.readDouble();
+        satelliteCount = in.readInt();
+        hdop = in.readDouble();
+        altitudeReference = in.readString();
+        hasGpsQuality = in.readByte() != 0;
+        ballisticsData = null; // Will be recalculated when needed
     }
 
     public static final Creator<Target> CREATOR = new Creator<Target>() {
@@ -75,6 +105,14 @@ public class Target implements Parcelable {
         dest.writeLong(lastSeen);
         dest.writeLong(calibrationTime);
         dest.writeDouble(batteryVoltage);
+        dest.writeInt(shotsFired);
+        dest.writeLong(lastShotTime);
+        dest.writeDouble(averageTimeOfFlight);
+        dest.writeInt(satelliteCount);
+        dest.writeDouble(hdop);
+        dest.writeString(altitudeReference);
+        dest.writeByte((byte) (hasGpsQuality ? 1 : 0));
+        // Note: ballisticsData is not parcelable, will need to be recalculated
     }
 
     // Getters and setters
@@ -129,10 +167,92 @@ public class Target implements Parcelable {
         this.lastSeen = System.currentTimeMillis();
     }
 
+    public BallisticsCalculator.BallisticsData getBallisticsData() {
+        return ballisticsData;
+    }
+
+    public void setBallisticsData(BallisticsCalculator.BallisticsData ballisticsData) {
+        this.ballisticsData = ballisticsData;
+    }
+
+    public int getShotsFired() {
+        return shotsFired;
+    }
+
+    public void incrementShotsFired() {
+        this.shotsFired++;
+        this.lastShotTime = System.currentTimeMillis();
+    }
+
+    public long getLastShotTime() {
+        return lastShotTime;
+    }
+
+    public double getAverageTimeOfFlight() {
+        return averageTimeOfFlight;
+    }
+
+    public void setAverageTimeOfFlight(double averageTimeOfFlight) {
+        this.averageTimeOfFlight = averageTimeOfFlight;
+    }
+
+    public boolean hasBallisticsData() {
+        return ballisticsData != null;
+    }
+
+    public String getBallisticsSummary() {
+        if (ballisticsData == null) {
+            return "No ballistics data";
+        }
+        return String.format("MV: %.0f m/s, BC: %.3f, ToF: %.3fs",
+                ballisticsData.muzzleVelocity,
+                ballisticsData.ballisticCoefficient,
+                ballisticsData.timeOfFlight);
+    }
+
+    // GPS Quality getters and setters
+    public int getSatelliteCount() {
+        return satelliteCount;
+    }
+
+    public double getHdop() {
+        return hdop;
+    }
+
+    public String getAltitudeReference() {
+        return altitudeReference;
+    }
+
+    public boolean hasGpsQuality() {
+        return hasGpsQuality;
+    }
+
+    public void setGpsQuality(int satellites, double hdop, String altitudeRef) {
+        this.satelliteCount = satellites;
+        this.hdop = hdop;
+        this.altitudeReference = altitudeRef;
+        this.hasGpsQuality = true;
+        this.lastSeen = System.currentTimeMillis();
+    }
+
+    public String getGpsQualitySummary() {
+        if (!hasGpsQuality) {
+            return "GPS quality unknown";
+        }
+        return String.format("Sats: %d, HDOP: %.1f, Alt: %s",
+                satelliteCount, hdop, altitudeReference);
+    }
+
+    public boolean isGpsQualityGood() {
+        return hasGpsQuality && satelliteCount >= 4 && hdop <= 2.0;
+    }
+
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
 
         Target target = (Target) o;
         return id.equals(target.id);

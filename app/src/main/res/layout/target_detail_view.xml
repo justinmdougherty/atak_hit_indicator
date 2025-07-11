@@ -93,6 +93,24 @@
                     android:text="Voltage:         —"
                     android:layout_marginBottom="4dp"/>
 
+                <TextView
+                    android:id="@+id/detailGpsQualityText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="GPS:             —"
+                    android:layout_marginBottom="4dp"
+                    android:visibility="gone"/>
+
+                <TextView
+                    android:id="@+id/detailBallisticsText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#CCCCCC"
+                    android:text="BC:              —"
+                    android:layout_marginBottom="4dp"
+                    android:visibility="gone"/>
+
             </LinearLayout>
 
         </LinearLayout> <com.atakmap.android.hitIndicator.ElevationProfileView
